@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serveStatic } from 'hono/cloudflare-workers';
+import imageList from './images.json';
 
 const app = new Hono();
 const extConvert = new Map<string, string>([
@@ -10,6 +12,8 @@ const extConvert = new Map<string, string>([
   ['gif', 'image/gif'],
 ]);
 
+app.use('/images/*', serveStatic({ root: './public/images' }));
+
 app.use(
   '*',
   cors({
@@ -18,7 +22,7 @@ app.use(
   }),
 );
 
-app.all('*', async (c) => {
+app.all('/random/*', async (c) => {
   const { searchParams } = new URL(c.req.raw.url);
   const cond = searchParams.get('cond') || '';
   const conds = cond.split(',');
@@ -35,34 +39,18 @@ app.all('*', async (c) => {
     return cachedRes;
   }
 
-  const listResult = await c.env.IMAGE_BUCKET.list({ prefix: conds.join('/') });
-  const objects = listResult.objects as R2Object[];
+  const filteredList = imageList.filter(p => p.startsWith(conds.join('/')));
 
-  if (objects.length === 0) {
+  if (filteredList.length === 0) {
     return new Response('Not found', {
       status: 404,
     });
   }
 
-  const randomIndex = Math.floor(Math.random() * objects.length);
-  const imageObj = objects[randomIndex];
+  const randomIndex = Math.floor(Math.random() * filteredList.length);
+  const imagePath = filteredList[randomIndex];
 
-  const splitted = imageObj.key.split('.');
-  const ext = splitted[splitted.length - 1];
-
-  const obj = await c.env.IMAGE_BUCKET.get(imageObj.key);
-
-  // 流石に毎回変わると遅すぎるので、
-  // 5分に1回キャッシュの有効期限が切れて画像が変わる仕組みにした
-  const cacheControl = force ? 'no-cache' : 'public, max-age=300';
-  const res = new Response(obj.body, {
-    headers: {
-      'Cache-Control': cacheControl,
-      'Content-Type': extConvert.get(ext) ?? 'application/octet-stream',
-    },
-  });
-  await cache.put(c.req.raw, res.clone());
-  return res;
+  return c.redirect('images/' + imagePath, 302);
 });
 
 export default app;
